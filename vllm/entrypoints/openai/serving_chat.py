@@ -1,7 +1,7 @@
 import codecs
 import time
 from typing import AsyncGenerator, AsyncIterator, List, Optional, Union
-
+from riki_redis import get_lora
 from fastapi import Request
 
 from vllm.engine.async_llm_engine import AsyncLLMEngine
@@ -47,9 +47,9 @@ class OpenAIServingChat(OpenAIServing):
         NOTE: Currently we do not support the following feature:
             - function_call (Users should implement this by themselves)
         """
-        error_check_ret = await self._check_model(request)
-        if error_check_ret is not None:
-            return error_check_ret
+        # error_check_ret = await self._check_model(request)
+        # if error_check_ret is not None:
+        #     return error_check_ret
 
         try:
             prompt = self.tokenizer.apply_chat_template(
@@ -67,7 +67,8 @@ class OpenAIServingChat(OpenAIServing):
             prompt_ids, prompt_text = self._validate_prompt_and_tokenize(
                 request, prompt=prompt)
             sampling_params = request.to_sampling_params()
-            lora_request = self._maybe_get_lora(request)
+            # lora_request = self._maybe_get_lora(request)
+            lora_request = get_lora(request)
             decoding_config = self.engine.engine.decoding_config
             guided_decoding_backend = request.guided_decoding_backend \
                 or decoding_config.guided_decoding_backend

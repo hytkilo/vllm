@@ -213,7 +213,7 @@ def _is_cpu() -> bool:
 
 
 def _install_punica() -> bool:
-    return bool(int(os.getenv("VLLM_INSTALL_PUNICA_KERNELS", "0")))
+    return bool(int(os.getenv("VLLM_INSTALL_PUNICA_KERNELS", "1")))
 
 
 def get_hipcc_rocm_version():
