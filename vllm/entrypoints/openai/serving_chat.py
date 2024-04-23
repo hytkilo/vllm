@@ -1,7 +1,7 @@
 import codecs
 import time
 from typing import AsyncGenerator, AsyncIterator, List, Optional, Union
-from riki_redis import get_lora
+from vllm.entrypoints.openai.riki_redis import get_lora
 from fastapi import Request
 
 from vllm.engine.async_llm_engine import AsyncLLMEngine
