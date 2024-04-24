@@ -125,6 +125,7 @@ class DefaultModelLoader(BaseModelLoader):
         
         Returns the path to the downloaded model, or None if the model is not
         downloaded from ModelScope."""
+        print(VLLM_USE_MODELSCOPE)
         if VLLM_USE_MODELSCOPE:
             # download model from ModelScope hub,
             # lazy import so that modelscope is not required for normal use.

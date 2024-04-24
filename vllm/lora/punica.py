@@ -6,7 +6,7 @@ import torch
 
 
 def _raise_import_error(e):
-    if torch.cuda.get_device_capability() < (8, 0):
+    if torch.cuda.get_device_capability() < (7, 0):
         raise ImportError(
             "punica LoRA kernels require compute capability >= 8.0") from e
     else:

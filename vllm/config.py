@@ -24,7 +24,7 @@ logger = init_logger(__name__)
 # If true, will load models from ModelScope instead of Hugging Face Hub.
 VLLM_USE_MODELSCOPE = os.environ.get("VLLM_USE_MODELSCOPE",
                                      "False").lower() == "true"
-
+print(VLLM_USE_MODELSCOPE)
 _GB = 1 << 30
 
 
@@ -103,6 +103,21 @@ class ModelConfig:
         self.max_context_len_to_capture = max_context_len_to_capture
         self.max_logprobs = max_logprobs
         self.skip_tokenizer_init = skip_tokenizer_init
+
+        if os.environ.get("VLLM_USE_MODELSCOPE", "False").lower() == "true":
+            # download model from ModelScope hub,
+            # lazy import so that modelscope is not required for normal use.
+            # pylint: disable=C.
+            from modelscope.hub.snapshot_download import snapshot_download
+
+            if not os.path.exists(model):
+                model_path = snapshot_download(model_id=model,
+                                               revision=revision)
+            else:
+                model_path = model
+            self.model = model_path
+            self.download_dir = model_path
+            self.tokenizer = model_path
 
         self.hf_config = get_config(self.model, trust_remote_code, revision,
                                     code_revision)

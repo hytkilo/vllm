@@ -10,11 +10,11 @@ redis_host = '10.12.0.16'
 redis_port = 6379
 redis_password = '2sSwwJ7@f8UT'
 
-r = redis.StrictRedis(host=redis_host, port=redis_port, password=redis_password, decode_responses=True)
+r = redis.StrictRedis(host=redis_host, port=redis_port, password=redis_password, decode_responses=True, db=5)
 
 key_prefix = 'YX:MODEL:LORA:'
-model_zip_dir = 'riki_models/zip/'
-model_models_dir = 'riki_models/models/'
+model_zip_dir = '/data/riki_vllm_models/zip/'
+model_models_dir = '/data/riki_vllm_models/models/'
 
 
 def extract_filename_from_url(url):
@@ -42,8 +42,8 @@ def download_file(url, filename):
 def download_and_unzip(modelUrl, modelFile):
     download_file(modelUrl, modelFile)
     with zipfile.ZipFile(model_zip_dir + modelFile, 'r') as zip_ref:
-        zip_ref.extractall(model_models_dir)
-    print(f"模型解压完毕，地址：{model_models_dir}")
+        zip_ref.extractall(model_models_dir + modelFile.split('.')[0] + '/')
+    print(f"模型解压完毕")
     pass
 
 
@@ -57,6 +57,8 @@ def get_path(model_info):
 
 
 def get_lora(request):
+    if 'qwen/' in request.model:
+        return None
     model_info_str = r.get(key_prefix + request.model)
     model_info = json.loads(model_info_str)
     path = get_path(model_info)
