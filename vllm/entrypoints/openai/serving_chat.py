@@ -67,8 +67,9 @@ class OpenAIServingChat(OpenAIServing):
             prompt_ids, prompt_text = self._validate_prompt_and_tokenize(
                 request, prompt=prompt)
             sampling_params = request.to_sampling_params()
-            # lora_request = self._maybe_get_lora(request)
-            lora_request = get_lora(request)
+            lora_request = self._maybe_get_lora(request)
+            if lora_request is None:
+                lora_request = get_lora(request)
             decoding_config = self.engine.engine.decoding_config
             guided_decoding_backend = request.guided_decoding_backend \
                 or decoding_config.guided_decoding_backend

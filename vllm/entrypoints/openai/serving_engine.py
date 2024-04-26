@@ -174,8 +174,9 @@ class OpenAIServing:
         for lora in self.lora_requests:
             if request.model == lora.lora_name:
                 return lora
+        return None
         # if _check_model has been called earlier, this will be unreachable
-        raise ValueError("The model `{request.model}` does not exist.")
+        # raise ValueError("The model `{request.model}` does not exist.")
 
     def _validate_prompt_and_tokenize(
         self,
