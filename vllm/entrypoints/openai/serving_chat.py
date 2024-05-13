@@ -1,6 +1,6 @@
 import codecs
 import time
-from vllm.entrypoints.openai.riki_redis import get_lor
+from vllm.entrypoints.openai.riki_redis import get_lora
 from typing import (AsyncGenerator, AsyncIterator, Awaitable, Iterable, List,
                     Optional, Tuple, TypedDict, Union, final)
 
