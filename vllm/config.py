@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
-
+import os
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization import (QUANTIZATION_METHODS,
                                                      get_quantization_config)
