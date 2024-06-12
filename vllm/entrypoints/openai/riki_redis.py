@@ -56,9 +56,18 @@ def get_path(model_info):
     return path
 
 
+def remove_at_and_after(text):
+    if "@" in text:
+        index = text.index("@")
+        return text[:index]
+    else:
+        return text
+
+
 def get_lora(request):
     if 'qwen/' in request.model:
         return None
+    request.model = remove_at_and_after(request.model)
     model_info_str = r.get(key_prefix + request.model)
     model_info = json.loads(model_info_str)
     path = get_path(model_info)
