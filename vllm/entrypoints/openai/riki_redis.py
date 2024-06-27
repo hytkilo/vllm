@@ -6,8 +6,8 @@ import os
 from urllib.parse import urlparse
 import zipfile
 
-redis_host = '10.12.0.16'
-redis_port = 6379
+redis_host = '124.71.209.169'
+redis_port = 56379
 redis_password = '2sSwwJ7@f8UT'
 
 r = redis.StrictRedis(host=redis_host, port=redis_port, password=redis_password, decode_responses=True, db=5)
