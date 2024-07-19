@@ -5,6 +5,7 @@ from typing import Optional
 import torch
 
 from vllm import _custom_ops as ops
+from vllm.platforms import current_platform
 
 
 def _check_punica_support():
@@ -12,7 +13,7 @@ def _check_punica_support():
         return
 
 def _raise_import_error(e):
-    if torch.cuda.get_device_capability() < (7, 0):
+    if current_platform.get_device_capability() < (7, 0):
         raise ImportError(
             "punica LoRA kernels require compute capability >= 8.0")
     else:
