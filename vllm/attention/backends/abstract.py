@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from enum import Enum, auto
 from typing import (TYPE_CHECKING, Any, Dict, Generic, List, Optional, Set,
@@ -7,8 +8,9 @@ from typing import (TYPE_CHECKING, Any, Dict, Generic, List, Optional, Set,
 import torch
 
 if TYPE_CHECKING:
-    from vllm.sequence import SequenceGroupMetadata
-    from vllm.worker.model_runner_base import ModelRunnerInputBuilderBase
+    from vllm.worker.model_runner_base import (ModelRunnerBase,
+                                               ModelRunnerInputBase,
+                                               ModelRunnerInputBuilderBase)
 
 
 class AttentionType(Enum):
@@ -33,6 +35,11 @@ class AttentionBackend(ABC):
     @staticmethod
     @abstractmethod
     def get_metadata_cls() -> Type["AttentionMetadata"]:
+        raise NotImplementedError
+
+    @staticmethod
+    @abstractmethod
+    def get_state_cls() -> Type["AttentionState"]:
         raise NotImplementedError
 
     @classmethod
@@ -74,6 +81,11 @@ class AttentionBackend(ABC):
         kv_caches: List[torch.Tensor],
         src_to_dists: torch.Tensor,
     ) -> None:
+        raise NotImplementedError
+
+    def advance_step(self, model_input: "ModelRunnerInputBase",
+                     sampled_token_ids: Optional[torch.Tensor],
+                     block_size: int, num_seqs: int, num_queries: int) -> None:
         raise NotImplementedError
 
 
@@ -124,29 +136,66 @@ class AttentionMetadata:
 T = TypeVar("T", bound=AttentionMetadata)
 
 
+class AttentionState(ABC, Generic[T]):
+    """Holds attention backend-specific objects reused during the
+    lifetime of the model runner."""
+
+    @abstractmethod
+    def __init__(self, runner: "ModelRunnerBase"):
+        ...
+
+    @abstractmethod
+    @contextmanager
+    def graph_capture(self, max_batch_size: int):
+        """Context manager used when capturing CUDA graphs."""
+        yield
+
+    @abstractmethod
+    def graph_clone(self, batch_size: int) -> "AttentionState[T]":
+        """Clone attention state to save in CUDA graph metadata."""
+        ...
+
+    @abstractmethod
+    def graph_capture_get_metadata_for_batch(
+            self,
+            batch_size: int,
+            is_encoder_decoder_model: bool = False) -> T:
+        """Get attention metadata for CUDA graph capture of batch_size."""
+        ...
+
+    @abstractmethod
+    def get_graph_input_buffers(
+            self,
+            attn_metadata: T,
+            is_encoder_decoder_model: bool = False) -> Dict[str, Any]:
+        """Get attention-specific input buffers for CUDA graph capture."""
+        ...
+
+    @abstractmethod
+    def prepare_graph_input_buffers(
+            self,
+            input_buffers: Dict[str, Any],
+            attn_metadata: T,
+            is_encoder_decoder_model: bool = False) -> None:
+        """In-place modify input buffers dict for CUDA graph replay."""
+        ...
+
+    @abstractmethod
+    def begin_forward(self, model_input: "ModelRunnerInputBase") -> None:
+        """Prepare state for forward pass."""
+        ...
+
+
 class AttentionMetadataBuilder(ABC, Generic[T]):
     """Abstract class for attention metadata builders."""
 
     @abstractmethod
-    def __init__(self, input_builder) -> None:
+    def __init__(self, input_builder: "ModelRunnerInputBuilderBase") -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def add_seq_group(self, seq_group_metadata: "SequenceGroupMetadata",
-                      token_lens: List[int], seq_lens: List[int],
-                      curr_seq_lens: List[int], query_lens: List[int],
-                      context_lens: List[int],
-                      curr_sliding_window_blocks: List[int],
-                      prefix_cache_hit: bool, chunked_prefill_enabled: bool):
-        """Add a sequence group to the metadata and update
-        corresponding fields (in Python objects).
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def build(self, runner: "ModelRunnerInputBuilderBase", seq_lens: List[int],
-              query_lens: List[int], cuda_graph_pad_size: int,
-              batch_size: int) -> T:
+    def build(self, seq_lens: List[int], query_lens: List[int],
+              cuda_graph_pad_size: int, batch_size: int) -> T:
         """Build attention metadata with on-device tensors."""
         raise NotImplementedError
 
@@ -164,6 +213,7 @@ class AttentionImpl(ABC, Generic[T]):
         sliding_window: Optional[int] = None,
         kv_cache_dtype: str = "auto",
         blocksparse_params: Optional[Dict[str, Any]] = None,
+        logits_soft_cap: Optional[float] = None,
     ) -> None:
         raise NotImplementedError
 

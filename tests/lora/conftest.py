@@ -65,10 +65,7 @@ def should_do_global_cleanup_after_test(request) -> bool:
     to initialize torch.
     """
 
-    if request.node.get_closest_marker("skip_global_cleanup"):
-        return False
-
-    return True
+    return not request.node.get_closest_marker("skip_global_cleanup")
 
 
 @pytest.fixture(autouse=True)
@@ -159,8 +156,14 @@ def dummy_model_gate_up() -> nn.Module:
 
 
 @pytest.fixture(scope="session")
-def sql_lora_files():
-    return snapshot_download(repo_id="yard1/llama-2-7b-sql-lora-test")
+def sql_lora_huggingface_id():
+    # huggingface repo id is used to test lora runtime downloading.
+    return "yard1/llama-2-7b-sql-lora-test"
+
+
+@pytest.fixture(scope="session")
+def sql_lora_files(sql_lora_huggingface_id):
+    return snapshot_download(repo_id=sql_lora_huggingface_id)
 
 
 @pytest.fixture(scope="session")
