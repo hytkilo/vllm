@@ -207,6 +207,7 @@ class OpenAIServing:
         for prompt_adapter in self.prompt_adapter_requests:
             if request.model == prompt_adapter.prompt_adapter_name:
                 return None, prompt_adapter
+        return None, None
         # if _check_model has been called earlier, this will be unreachable
         # raise ValueError("The model `{request.model}` does not exist.")
 
