@@ -1,13 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
 """Benchmark offline prioritization."""
 import argparse
+import dataclasses
 import json
 import random
 import time
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS
+from vllm.engine.arg_utils import EngineArgs
+from vllm.utils import FlexibleArgumentParser
+
+
+#Select a equi-probable random priority
+def get_random_flag():
+    return 0 if random.random() < 0.5 else 1
 
 
 def sample_requests(
@@ -15,7 +23,7 @@ def sample_requests(
     num_requests: int,
     tokenizer: PreTrainedTokenizerBase,
     fixed_output_len: Optional[int],
-) -> List[Tuple[str, int, int]]:
+) -> list[tuple[str, int, int, int]]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError("output_len too small")
 
@@ -32,7 +40,7 @@ def sample_requests(
     random.shuffle(dataset)
 
     # Filter out sequences that are too long or too short
-    filtered_dataset: List[Tuple[str, int, int]] = []
+    filtered_dataset: list[tuple[str, int, int]] = []
     for i in range(len(dataset)):
         if len(filtered_dataset) == num_requests:
             break
@@ -52,8 +60,7 @@ def sample_requests(
             # Prune too long sequences.
             continue
 
-        #Select a equi-probable random priority
-        priority = 0 if random.random() < 0.5 else 1
+        priority = get_random_flag()
 
         filtered_dataset.append((prompt, prompt_len, output_len, priority))
 
@@ -61,48 +68,19 @@ def sample_requests(
 
 
 def run_vllm(
-    requests: List[Tuple[str, int, int]],
-    model: str,
-    tokenizer: str,
-    quantization: Optional[str],
-    tensor_parallel_size: int,
-    seed: int,
+    requests: list[tuple[str, int, int]],
     n: int,
-    use_beam_search: bool,
-    trust_remote_code: bool,
-    dtype: str,
-    max_model_len: Optional[int],
-    enforce_eager: bool,
-    kv_cache_dtype: str,
-    quantization_param_path: Optional[str],
-    device: str,
-    enable_prefix_caching: bool,
-    enable_chunked_prefill: bool,
-    max_num_batched_tokens: int,
-    gpu_memory_utilization: float = 0.9,
-    download_dir: Optional[str] = None,
+    engine_args: EngineArgs,
+    disable_detokenize: bool = False,
 ) -> float:
     from vllm import LLM, SamplingParams
-    llm = LLM(
-        model=model,
-        tokenizer=tokenizer,
-        quantization=quantization,
-        tensor_parallel_size=tensor_parallel_size,
-        seed=seed,
-        trust_remote_code=trust_remote_code,
-        dtype=dtype,
-        max_model_len=max_model_len,
-        gpu_memory_utilization=gpu_memory_utilization,
-        enforce_eager=enforce_eager,
-        kv_cache_dtype=kv_cache_dtype,
-        quantization_param_path=quantization_param_path,
-        device=device,
-        enable_prefix_caching=enable_prefix_caching,
-        download_dir=download_dir,
-        enable_chunked_prefill=enable_chunked_prefill,
-        max_num_batched_tokens=max_num_batched_tokens,
-        disable_log_stats=False,
-    )
+    llm = LLM(**dataclasses.asdict(engine_args))
+
+    assert all(
+        llm.llm_engine.model_config.max_model_len >= (request[1] + request[2])
+        for request in requests), (
+            "Please ensure that max_model_len is greater than the sum of"
+            " input_len and output_len for all requests.")
 
     # Add the requests to the engine.
     prompts = []
@@ -114,11 +92,11 @@ def run_vllm(
         sampling_params.append(
             SamplingParams(
                 n=n,
-                temperature=0.0 if use_beam_search else 1.0,
+                temperature=1.0,
                 top_p=1.0,
-                use_beam_search=use_beam_search,
                 ignore_eos=True,
                 max_tokens=output_len,
+                detokenize=not disable_detokenize,
             ))
 
     start = time.perf_counter()
@@ -137,22 +115,16 @@ def main(args: argparse.Namespace):
     if args.dataset is None:
         # Synthesize a prompt with the given input length.
         prompt = "hi" * (args.input_len - 1)
-        requests = [(prompt, args.input_len, args.output_len)
-                    for _ in range(args.num_prompts)]
+        requests = [(prompt, args.input_len, args.output_len,
+                     get_random_flag()) for _ in range(args.num_prompts)]
     else:
         requests = sample_requests(args.dataset, args.num_prompts, tokenizer,
                                    args.output_len)
 
     if args.backend == "vllm":
-        elapsed_time = run_vllm(
-            requests, args.model, args.tokenizer, args.quantization,
-            args.tensor_parallel_size, args.seed, args.n, args.use_beam_search,
-            args.trust_remote_code, args.dtype, args.max_model_len,
-            args.enforce_eager, args.kv_cache_dtype,
-            args.quantization_param_path, args.device,
-            args.enable_prefix_caching, args.enable_chunked_prefill,
-            args.max_num_batched_tokens, args.gpu_memory_utilization,
-            args.download_dir)
+        elapsed_time = run_vllm(requests, args.n,
+                                EngineArgs.from_cli_args(args),
+                                args.disable_detokenize)
     else:
         raise ValueError(f"Unknown backend: {args.backend}")
     total_num_tokens = sum(prompt_len + output_len
@@ -174,7 +146,7 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Benchmark the throughput.")
+    parser = FlexibleArgumentParser(description="Benchmark the throughput.")
     parser.add_argument("--backend",
                         type=str,
                         choices=["vllm", "hf", "mii"],
@@ -192,97 +164,27 @@ if __name__ == "__main__":
                         default=None,
                         help="Output length for each request. Overrides the "
                         "output length from the dataset.")
-    parser.add_argument("--model", type=str, default="facebook/opt-125m")
-    parser.add_argument("--tokenizer", type=str, default=None)
-    parser.add_argument('--quantization',
-                        '-q',
-                        choices=[*QUANTIZATION_METHODS, None],
-                        default=None)
-    parser.add_argument("--tensor-parallel-size", "-tp", type=int, default=1)
     parser.add_argument("--n",
                         type=int,
                         default=1,
                         help="Number of generated sequences per prompt.")
-    parser.add_argument("--use-beam-search", action="store_true")
     parser.add_argument("--num-prompts",
                         type=int,
                         default=200,
                         help="Number of prompts to process.")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument('--trust-remote-code',
-                        action='store_true',
-                        help='trust remote code from huggingface')
-    parser.add_argument(
-        '--max-model-len',
-        type=int,
-        default=None,
-        help='Maximum length of a sequence (including prompt and output). '
-        'If None, will be derived from the model.')
-    parser.add_argument(
-        '--dtype',
-        type=str,
-        default='auto',
-        choices=['auto', 'half', 'float16', 'bfloat16', 'float', 'float32'],
-        help='data type for model weights and activations. '
-        'The "auto" option will use FP16 precision '
-        'for FP32 and FP16 models, and BF16 precision '
-        'for BF16 models.')
-    parser.add_argument('--gpu-memory-utilization',
-                        type=float,
-                        default=0.9,
-                        help='the fraction of GPU memory to be used for '
-                        'the model executor, which can range from 0 to 1.'
-                        'If unspecified, will use the default value of 0.9.')
-    parser.add_argument("--enforce-eager",
-                        action="store_true",
-                        help="enforce eager execution")
-    parser.add_argument(
-        '--kv-cache-dtype',
-        type=str,
-        choices=['auto', 'fp8', 'fp8_e5m2', 'fp8_e4m3'],
-        default="auto",
-        help='Data type for kv cache storage. If "auto", will use model '
-        'data type. CUDA 11.8+ supports fp8 (=fp8_e4m3) and fp8_e5m2. '
-        'ROCm (AMD GPU) supports fp8 (=fp8_e4m3)')
-    parser.add_argument(
-        '--quantization-param-path',
-        type=str,
-        default=None,
-        help='Path to the JSON file containing the KV cache scaling factors. '
-        'This should generally be supplied, when KV cache dtype is FP8. '
-        'Otherwise, KV cache scaling factors default to 1.0, which may cause '
-        'accuracy issues. FP8_E5M2 (without scaling) is only supported on '
-        'cuda version greater than 11.8. On ROCm (AMD GPU), FP8_E4M3 is '
-        'instead supported for common inference criteria.')
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help='device type for vLLM execution, supporting CUDA and CPU.')
-    parser.add_argument(
-        "--enable-prefix-caching",
-        action='store_true',
-        help="enable automatic prefix caching for vLLM backend.")
-    parser.add_argument("--enable-chunked-prefill",
-                        action='store_true',
-                        help="enable chunked prefill for vLLM backend.")
-    parser.add_argument('--max-num-batched-tokens',
-                        type=int,
-                        default=None,
-                        help='maximum number of batched tokens per '
-                        'iteration')
-    parser.add_argument('--download-dir',
-                        type=str,
-                        default=None,
-                        help='directory to download and load the weights, '
-                        'default to the default cache dir of huggingface')
     parser.add_argument(
         '--output-json',
         type=str,
         default=None,
         help='Path to save the throughput results in JSON format.')
+    parser.add_argument(
+        '--disable-detokenize',
+        action='store_true',
+        help=("Do not detokenize responses (i.e. do not include "
+              "detokenization time in the latency measurement)"),
+    )
 
+    parser = EngineArgs.add_cli_args(parser)
     args = parser.parse_args()
     if args.tokenizer is None:
         args.tokenizer = args.model

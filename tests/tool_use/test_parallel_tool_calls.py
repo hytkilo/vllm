@@ -1,5 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import json
-from typing import Dict, List, Optional
+from typing import Optional
 
 import openai
 import pytest
@@ -26,7 +28,7 @@ async def test_parallel_tool_calls(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         messages=MESSAGES_ASKING_FOR_PARALLEL_TOOLS,
         temperature=0,
-        max_tokens=200,
+        max_completion_tokens=200,
         model=model_name,
         tools=[WEATHER_TOOL, SEARCH_TOOL],
         logprobs=False)
@@ -45,14 +47,14 @@ async def test_parallel_tool_calls(client: openai.AsyncOpenAI,
         assert tool_call.type == "function"
         assert tool_call.function is not None
         assert isinstance(tool_call.id, str)
-        assert len(tool_call.id) > 16
+        assert len(tool_call.id) >= 9
 
         # make sure the weather tool was called correctly
         assert tool_call.function.name == WEATHER_TOOL["function"]["name"]
         assert isinstance(tool_call.function.arguments, str)
 
         parsed_arguments = json.loads(tool_call.function.arguments)
-        assert isinstance(parsed_arguments, Dict)
+        assert isinstance(parsed_arguments, dict)
         assert isinstance(parsed_arguments.get("city"), str)
         assert isinstance(parsed_arguments.get("state"), str)
 
@@ -63,7 +65,7 @@ async def test_parallel_tool_calls(client: openai.AsyncOpenAI,
         model=model_name,
         messages=MESSAGES_ASKING_FOR_PARALLEL_TOOLS,
         temperature=0,
-        max_tokens=200,
+        max_completion_tokens=200,
         tools=[WEATHER_TOOL, SEARCH_TOOL],
         logprobs=False,
         stream=True)
@@ -71,8 +73,8 @@ async def test_parallel_tool_calls(client: openai.AsyncOpenAI,
     role_name: Optional[str] = None
     finish_reason_count: int = 0
 
-    tool_call_names: List[str] = []
-    tool_call_args: List[str] = []
+    tool_call_names: list[str] = []
+    tool_call_args: list[str] = []
     tool_call_idx: int = -1
     tool_call_id_count: int = 0
 
@@ -108,7 +110,7 @@ async def test_parallel_tool_calls(client: openai.AsyncOpenAI,
             if tool_call.id:
                 tool_call_id_count += 1
                 assert (isinstance(tool_call.id, str)
-                        and (len(tool_call.id) > 16))
+                        and (len(tool_call.id) >= 9))
 
             # if parts of the function start being streamed
             if tool_call.function:
@@ -154,7 +156,7 @@ async def test_parallel_tool_calls_with_results(client: openai.AsyncOpenAI,
     chat_completion = await client.chat.completions.create(
         messages=MESSAGES_WITH_PARALLEL_TOOL_RESPONSE,
         temperature=0,
-        max_tokens=200,
+        max_completion_tokens=200,
         model=model_name,
         tools=[WEATHER_TOOL, SEARCH_TOOL],
         logprobs=False)
@@ -172,13 +174,13 @@ async def test_parallel_tool_calls_with_results(client: openai.AsyncOpenAI,
     stream = await client.chat.completions.create(
         messages=MESSAGES_WITH_PARALLEL_TOOL_RESPONSE,
         temperature=0,
-        max_tokens=200,
+        max_completion_tokens=200,
         model=model_name,
         tools=[WEATHER_TOOL, SEARCH_TOOL],
         logprobs=False,
         stream=True)
 
-    chunks: List[str] = []
+    chunks: list[str] = []
     finish_reason_count = 0
     role_sent: bool = False
 

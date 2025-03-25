@@ -1,20 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import time
-from typing import List
 
 import pytest
 import ray
 from prometheus_client import REGISTRY
 
+import vllm.envs as envs
 from vllm import EngineArgs, LLMEngine
+from vllm.distributed import cleanup_dist_env_and_memory
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.engine.metrics import RayPrometheusStatLogger
 from vllm.sampling_params import SamplingParams
+from vllm.test_utils import MODEL_WEIGHTS_S3_BUCKET
 
-from ..conftest import cleanup
+
+@pytest.fixture(scope="function", autouse=True)
+def use_v0_only(monkeypatch):
+    """
+    This module tests V0 internals, so set VLLM_USE_V1=0.
+    """
+    monkeypatch.setenv('VLLM_USE_V1', '0')
+
 
 MODELS = [
-    "facebook/opt-125m",
+    "distilbert/distilgpt2",
 ]
 
 
@@ -86,12 +97,51 @@ def test_metric_counter_generation_tokens(
 
 
 @pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("max_tokens", [128, 129])
+@pytest.mark.parametrize("disable_async_output_proc", [True, False])
+def test_metric_counter_generation_tokens_multi_step(
+    vllm_runner,
+    example_prompts,
+    model: str,
+    max_tokens: int,
+    disable_async_output_proc: bool,
+) -> None:
+    num_scheduler_steps = 8
+    with vllm_runner(
+            model,
+            disable_log_stats=False,
+            gpu_memory_utilization=0.4,
+            num_scheduler_steps=num_scheduler_steps,
+            disable_async_output_proc=disable_async_output_proc,
+    ) as vllm_model:
+        vllm_outputs = vllm_model.generate_greedy(example_prompts, max_tokens)
+        tokenizer = vllm_model.model.get_tokenizer()
+        stat_logger = vllm_model.model.llm_engine.stat_loggers['prometheus']
+        metric_count = stat_logger.metrics.counter_generation_tokens.labels(
+            **stat_logger.labels)._value.get()
+        vllm_generation_count = 0
+        for i in range(len(example_prompts)):
+            vllm_output_ids, vllm_output_str = vllm_outputs[i]
+            prompt_ids = tokenizer.encode(example_prompts[i])
+            # vllm_output_ids contains both prompt tokens and generation tokens.
+            # We're interested only in the count of the generation tokens.
+            vllm_generation_count += len(vllm_output_ids) - len(prompt_ids)
+
+    # The multi-step scheduling will continue to execute forward even when
+    # encountering EOS, leading to slightly imprecise metrics.
+    assert abs(vllm_generation_count - metric_count) <\
+        len(example_prompts) * num_scheduler_steps, \
+        (f"generation token count: {vllm_generation_count!r}\n"
+         f"metric: {metric_count!r}")
+
+
+@pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("dtype", ["float"])
 @pytest.mark.parametrize(
     "served_model_name",
     [None, [], ["ModelName0"], ["ModelName0", "ModelName1", "ModelName2"]])
 def test_metric_set_tag_model_name(vllm_runner, model: str, dtype: str,
-                                   served_model_name: List[str]) -> None:
+                                   served_model_name: list[str]) -> None:
     with vllm_runner(model,
                      dtype=dtype,
                      disable_log_stats=False,
@@ -100,6 +150,8 @@ def test_metric_set_tag_model_name(vllm_runner, model: str, dtype: str,
         stat_logger = vllm_model.model.llm_engine.stat_loggers['prometheus']
         metrics_tag_content = stat_logger.labels["model_name"]
 
+    if envs.VLLM_CI_USE_S3:
+        model = f"{MODEL_WEIGHTS_S3_BUCKET}/{model}"
     if served_model_name is None or served_model_name == []:
         assert metrics_tag_content == model, (
             f"Metrics tag model_name is wrong! expect: {model!r}\n"
@@ -128,9 +180,11 @@ async def test_async_engine_log_metrics_regression(
     when disable_log_stats=False
     (see: https://github.com/vllm-project/vllm/pull/4150#pullrequestreview-2008176678)
     """
-    engine_args = AsyncEngineArgs(model=model,
-                                  dtype=dtype,
-                                  disable_log_stats=disable_log_stats)
+    engine_args = AsyncEngineArgs(
+        model=model,
+        dtype=dtype,
+        disable_log_stats=disable_log_stats,
+    )
     async_engine = AsyncLLMEngine.from_engine_args(engine_args)
     for i, prompt in enumerate(example_prompts):
         results = async_engine.generate(
@@ -142,7 +196,7 @@ async def test_async_engine_log_metrics_regression(
         async for _ in results:
             pass
 
-    assert_metrics(async_engine.engine, disable_log_stats,
+    assert_metrics(model, async_engine.engine, disable_log_stats,
                    len(example_prompts))
 
 
@@ -157,9 +211,11 @@ def test_engine_log_metrics_regression(
     max_tokens: int,
     disable_log_stats: bool,
 ) -> None:
-    engine_args = EngineArgs(model=model,
-                             dtype=dtype,
-                             disable_log_stats=disable_log_stats)
+    engine_args = EngineArgs(
+        model=model,
+        dtype=dtype,
+        disable_log_stats=disable_log_stats,
+    )
     engine = LLMEngine.from_engine_args(engine_args)
     for i, prompt in enumerate(example_prompts):
         engine.add_request(
@@ -170,7 +226,9 @@ def test_engine_log_metrics_regression(
     while engine.has_unfinished_requests():
         engine.step()
 
-    assert_metrics(engine, disable_log_stats, len(example_prompts))
+    if envs.VLLM_CI_USE_S3:
+        model = f"{MODEL_WEIGHTS_S3_BUCKET}/{model}"
+    assert_metrics(model, engine, disable_log_stats, len(example_prompts))
 
 
 @pytest.mark.parametrize("model", MODELS)
@@ -185,13 +243,14 @@ def test_metric_spec_decode(
 ) -> None:
     k = 5
 
-    with vllm_runner(model,
-                     dtype=dtype,
-                     disable_log_stats=False,
-                     gpu_memory_utilization=0.4,
-                     speculative_model=model,
-                     num_speculative_tokens=k,
-                     use_v2_block_manager=True) as vllm_model:
+    with vllm_runner(
+            model,
+            dtype=dtype,
+            disable_log_stats=False,
+            gpu_memory_utilization=0.4,
+            speculative_model=model,
+            num_speculative_tokens=k,
+    ) as vllm_model:
 
         # Force log interval to be 0 to catch all metrics.
         stat_logger = vllm_model.model.llm_engine.stat_loggers['prometheus']
@@ -236,14 +295,15 @@ def test_metric_spec_decode_interval(
 ) -> None:
     k = 5
 
-    engine_args = EngineArgs(model=model,
-                             dtype=dtype,
-                             disable_log_stats=False,
-                             gpu_memory_utilization=0.4,
-                             speculative_model=model,
-                             num_speculative_tokens=k,
-                             use_v2_block_manager=True,
-                             enforce_eager=True)
+    engine_args = EngineArgs(
+        model=model,
+        dtype=dtype,
+        disable_log_stats=False,
+        gpu_memory_utilization=0.4,
+        speculative_model=model,
+        num_speculative_tokens=k,
+        enforce_eager=True,
+    )
 
     engine = LLMEngine.from_engine_args(engine_args)
 
@@ -307,10 +367,10 @@ def test_metric_spec_decode_interval(
 
     finally:
         del engine
-        cleanup()
+        cleanup_dist_env_and_memory()
 
 
-def assert_metrics(engine: LLMEngine, disable_log_stats: bool,
+def assert_metrics(model: str, engine: LLMEngine, disable_log_stats: bool,
                    num_requests: int) -> None:
     if disable_log_stats:
         with pytest.raises(AttributeError):
@@ -321,13 +381,13 @@ def assert_metrics(engine: LLMEngine, disable_log_stats: bool,
         # Ensure the count bucket of request-level histogram metrics matches
         # the number of requests as a simple sanity check to ensure metrics are
         # generated
-        labels = {'model_name': engine.model_config.model}
+        labels = {'model_name': model}
         request_histogram_metrics = [
             "vllm:e2e_request_latency_seconds",
             "vllm:request_prompt_tokens",
             "vllm:request_generation_tokens",
-            "vllm:request_params_best_of",
             "vllm:request_params_n",
+            "vllm:request_params_max_tokens",
         ]
         for metric_name in request_histogram_metrics:
             metric_value = REGISTRY.get_sample_value(f"{metric_name}_count",
@@ -373,7 +433,7 @@ def test_engine_log_metrics_ray(
         logger = _RayPrometheusStatLogger(
             local_interval=0.5,
             labels=dict(model_name=engine.model_config.served_model_name),
-            max_model_len=engine.model_config.max_model_len)
+            vllm_config=engine.vllm_config)
         engine.add_logger("ray", logger)
         for i, prompt in enumerate(example_prompts):
             engine.add_request(

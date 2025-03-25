@@ -1,9 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
 """Compare the outputs of HF and vLLM when using beam search.
 
 Run `pytest tests/samplers/test_beam_search.py`.
 """
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def v1(run_with_both_engines):
+    """We can run both engines for this test."""
+    pass
+
 
 # FIXME(zhuohan): The test can not pass if we:
 #   1. Increase max_tokens to 256.
@@ -14,6 +22,7 @@ BEAM_WIDTHS = [4]
 MODELS = ["TinyLlama/TinyLlama-1.1B-Chat-v1.0"]
 
 
+@pytest.mark.skip_v1  # FIXME: This fails on V1 right now.
 @pytest.mark.parametrize("model", MODELS)
 @pytest.mark.parametrize("dtype", ["half"])
 @pytest.mark.parametrize("max_tokens", MAX_TOKENS)
@@ -33,8 +42,8 @@ def test_beam_search_single_input(
                                                    max_tokens)
 
     with vllm_runner(model, dtype=dtype) as vllm_model:
-        vllm_outputs = vllm_model.generate_beam_search_new(
-            example_prompts, beam_width, max_tokens)
+        vllm_outputs = vllm_model.generate_beam_search(example_prompts,
+                                                       beam_width, max_tokens)
 
     for i in range(len(example_prompts)):
         hf_output_ids, hf_output_texts = hf_outputs[i]
