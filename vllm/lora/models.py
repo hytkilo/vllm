@@ -272,7 +272,9 @@ class LoRAModel(AdapterModel):
                     f" target modules in {expected_lora_modules}"
                     f" but received {unexpected_modules}."
                     f" Please verify that the loaded LoRA module is correct")
-            tensors = torch.load(lora_bin_file_path, map_location=device)
+            tensors = torch.load(lora_bin_file_path,
+                                 map_location=device,
+                                 weights_only=True)
         else:
             raise ValueError(f"{lora_dir} doesn't contain tensors")
 
@@ -342,7 +344,7 @@ class LoRAModelManager(AdapterModelManager):
 
         self.supported_lora_modules = get_supported_lora_modules(self.model)
         assert self.supported_lora_modules, "No supported LoRA modules found in"
-        f"{self.model.__class__.__name__}."
+        f" {self.model.__class__.__name__}."
         if lora_config.long_lora_scaling_factors:
             # We need to replace rotary emb layer to do batch computation
             # for long lora.
@@ -362,7 +364,7 @@ class LoRAModelManager(AdapterModelManager):
         self._last_mapping: Optional[LoRAMapping] = None
         self._create_lora_modules()
         self.model.lora_manager = self
-        self.adapter_type = 'LoRa'
+        self.adapter_type = 'LoRA'
 
     @property
     def capacity(self) -> int:
